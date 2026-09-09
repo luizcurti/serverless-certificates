@@ -1,0 +1,191 @@
+{
+  "info": {
+    "name": "Certificate Generation Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "apiKey", "value": "test-api-key" }
+  ],
+  "item": [
+    {
+      "name": "Generate Certificate - unauthorized",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/generateCertificate",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"id\":\"api-test-000\",\"name\":\"API Test User\",\"grade\":\"A+\"}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 401', () => pm.response.to.have.status(401));",
+              "pm.test('returns invalid api key message', () => {",
+              "  pm.expect(pm.response.json().message).to.eql('Invalid or missing API key');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate Certificate - success",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-api-key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseUrl}}/generateCertificate",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"id\":\"api-test-001\",\"name\":\"API Test User\",\"grade\":\"A+\"}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 201', () => pm.response.to.have.status(201));",
+              "const json = pm.response.json();",
+              "pm.test('returns success message and url', () => {",
+              "  pm.expect(json.message).to.eql('Certificate created successfully');",
+              "  pm.expect(json.url).to.include('api-test-001.pdf');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate Certificate - already exists",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-api-key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseUrl}}/generateCertificate",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"id\":\"api-test-001\",\"name\":\"Someone Else\",\"grade\":\"C\"}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('returns the original stored record, not the new submission', () => {",
+              "  pm.expect(json.message).to.eql('Certificate already exists');",
+              "  pm.expect(json.name).to.eql('API Test User');",
+              "  pm.expect(json.url).to.include('api-test-001.pdf');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate Certificate - missing required fields",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-api-key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseUrl}}/generateCertificate",
+        "body": { "mode": "raw", "raw": "{\"id\":\"api-test-002\"}" }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 400', () => pm.response.to.have.status(400));",
+              "pm.test('returns validation error message', () => {",
+              "  pm.expect(pm.response.json().message).to.eql('id, name and grade are required');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Generate Certificate - invalid JSON body",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "x-api-key", "value": "{{apiKey}}" }
+        ],
+        "url": "{{baseUrl}}/generateCertificate",
+        "body": { "mode": "raw", "raw": "{not valid json" }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 400', () => pm.response.to.have.status(400));",
+              "pm.test('returns invalid JSON message', () => {",
+              "  pm.expect(pm.response.json().message).to.eql('Invalid JSON in request body');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Verify Certificate - found",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/verifyCertificate/api-test-001"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const json = pm.response.json();",
+              "pm.test('returns the certificate holder name and url', () => {",
+              "  pm.expect(json.message).to.eql('Valid certificate');",
+              "  pm.expect(json.name).to.eql('API Test User');",
+              "  pm.expect(json.url).to.include('api-test-001.pdf');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Verify Certificate - not found",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/verifyCertificate/does-not-exist"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 404', () => pm.response.to.have.status(404));",
+              "pm.test('returns not found message', () => {",
+              "  pm.expect(pm.response.json().message).to.eql('Certificate not found');",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+services:
+  # Pinned to 4.0.3: newer "latest" builds require a LocalStack account/auth
+  # token to boot at all, even for free community services like DynamoDB/S3.
+  localstack:
+    container_name: certificate-localstack
+    image: localstack/localstack:4.0.3
+    ports:
+      - "4566:4566"            # LocalStack Gateway
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - DEBUG=${DEBUG-}
+      - SERVICES=dynamodb,s3
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - "./localstack-init:/etc/localstack/init/ready.d"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - certificate-network
+
+  dynamodb-admin:
+    container_name: certificate-dynamodb-admin
+    image: aaronshaf/dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://localstack:4566
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - certificate-network
+
+  app:
+    container_name: certificate-app
+    build: .
+    # Matches the x86_64 AWS Lambda runtime this service deploys to: the
+    # bundled Chromium binary (@sparticuz/chromium) is x86_64-only. On
+    # arm64 hosts (e.g. Apple Silicon) this runs under emulation.
+    platform: linux/amd64
+    ports:
+      - "3000:3000"
+    environment:
+      - IS_OFFLINE=true
+      - AWS_REGION=us-east-1
+      - DYNAMODB_ENDPOINT=http://localstack:4566
+      - S3_ENDPOINT=http://localstack:4566
+      - S3_BUCKET_NAME=certificadoignite2021
+      - API_KEY=local-dev-api-key
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - certificate-network
+
+networks:
+  certificate-network:
+    driver: bridge

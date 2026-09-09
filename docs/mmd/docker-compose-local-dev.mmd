@@ -1,0 +1,15 @@
+flowchart TB
+    Dev([Developer])
+
+    subgraph Compose["docker-compose.yml (certificate-network)"]
+        App["app\n(plain Node HTTP server, port 3000)"]
+        LS["localstack\n(DynamoDB + S3, port 4566)"]
+        Admin["dynamodb-admin\n(port 8001)"]
+    end
+
+    Dev -->|"curl / browser :3000"| App
+    Dev -->|"browser :8001"| Admin
+    App -->|"DYNAMODB_ENDPOINT / S3_ENDPOINT"| LS
+    Admin -->|"DYNAMO_ENDPOINT"| LS
+
+    Init["localstack-init/init.sh\n(mounted into /etc/localstack/init/ready.d)"] -.->|"creates table + bucket on boot"| LS

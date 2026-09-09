@@ -1,0 +1,25 @@
+node_modules
+build/*
+coverage
+db/
+package-lock.json
+dist
+.DS_Store
+localstack-data/
+certificate.pdf
+.tmp-api-test-server-*.js
+.tmp-dev-server-*.js
+.tmp-local-server.js
+
+# Stale artifacts from the removed Serverless Framework tooling
+.esbuild/
+.serverless/
+
+# Terraform
+infra/build/
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/*.tfplan
+infra/*.tfvars
+!infra/*.tfvars.example

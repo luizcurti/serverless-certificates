@@ -1,0 +1,179 @@
+diff --git a/node_modules/postman-collection/lib/superstring/dynamic-variables.js b/node_modules/postman-collection/lib/superstring/dynamic-variables.js
+index aeff852..c6e7aa6 100644
+--- a/node_modules/postman-collection/lib/superstring/dynamic-variables.js
++++ b/node_modules/postman-collection/lib/superstring/dynamic-variables.js
+@@ -1,4 +1,4 @@
+-var faker = require('@faker-js/faker/locale/en'),
++var faker = require('./faker-compat'),
+     uuid = require('uuid'),
+ 
+     // locale list generated from: https://github.com/chromium/chromium/blob/master/ui/base/l10n/l10n_util.cc
+diff --git a/node_modules/postman-collection/lib/superstring/faker-compat.js b/node_modules/postman-collection/lib/superstring/faker-compat.js
+new file mode 100644
+index 0000000..a6ebed1
+--- /dev/null
++++ b/node_modules/postman-collection/lib/superstring/faker-compat.js
+@@ -0,0 +1,163 @@
++// Compatibility shim mapping the old @faker-js/faker@5.x API (used by this
++// file's dynamic-variables.js) onto @faker-js/faker@10.x's renamed modules.
++//
++// This exists because postman-collection pins @faker-js/faker to 5.5.3,
++// which is affected by CVE-2026-73231 (arbitrary code execution via
++// faker.helpers.fake). The real fix requires faker >=10.5.0, but that
++// release renamed/removed the modules this file calls directly
++// (faker.address -> faker.location, faker.name -> faker.person, etc).
++// See patches/postman-collection+<version>.patch for how this file is wired in.
++
++var faker = require('@faker-js/faker').faker;
++
++module.exports = {
++    address: {
++        city: faker.location.city,
++        country: faker.location.country,
++        countryCode: faker.location.countryCode,
++        latitude: faker.location.latitude,
++        longitude: faker.location.longitude,
++        streetAddress: faker.location.streetAddress,
++        streetName: faker.location.street
++    },
++    commerce: {
++        color: faker.color.human,
++        department: faker.commerce.department,
++        product: faker.commerce.product,
++        productAdjective: faker.commerce.productAdjective,
++        productMaterial: faker.commerce.productMaterial,
++        productName: faker.commerce.productName
++    },
++    company: {
++        companyName: faker.company.name,
++        companySuffix: function () {
++            return faker.helpers.arrayElement(['Inc', 'LLC', 'Group', 'and Sons', 'Ltd']);
++        },
++        catchPhrase: faker.company.catchPhrase,
++        catchPhraseAdjective: faker.company.catchPhraseAdjective,
++        catchPhraseDescriptor: faker.company.catchPhraseDescriptor,
++        catchPhraseNoun: faker.company.catchPhraseNoun,
++        bs: faker.company.buzzPhrase,
++        bsAdjective: faker.company.buzzAdjective,
++        bsBuzz: faker.company.buzzVerb,
++        bsNoun: faker.company.buzzNoun
++    },
++    database: {
++        column: faker.database.column,
++        type: faker.database.type,
++        collation: faker.database.collation,
++        engine: faker.database.engine
++    },
++    date: {
++        past: faker.date.past,
++        future: faker.date.future,
++        recent: faker.date.recent,
++        month: faker.date.month,
++        weekday: faker.date.weekday
++    },
++    finance: {
++        account: faker.finance.accountNumber,
++        accountName: faker.finance.accountName,
++        mask: function () {
++            return '(...' + faker.string.numeric(4) + ')';
++        },
++        amount: faker.finance.amount,
++        transactionType: faker.finance.transactionType,
++        currencyCode: faker.finance.currencyCode,
++        currencyName: faker.finance.currencyName,
++        currencySymbol: faker.finance.currencySymbol,
++        bitcoinAddress: faker.finance.bitcoinAddress,
++        iban: faker.finance.iban,
++        bic: faker.finance.bic
++    },
++    hacker: {
++        abbreviation: faker.hacker.abbreviation,
++        adjective: faker.hacker.adjective,
++        noun: faker.hacker.noun,
++        verb: faker.hacker.verb,
++        ingverb: faker.hacker.ingverb,
++        phrase: faker.hacker.phrase
++    },
++    image: {
++        avatar: faker.image.avatar,
++        imageUrl: faker.image.url,
++        abstract: faker.image.url,
++        animals: faker.image.url,
++        business: faker.image.url,
++        cats: faker.image.url,
++        city: faker.image.url,
++        food: faker.image.url,
++        nightlife: faker.image.url,
++        fashion: faker.image.url,
++        people: faker.image.personPortrait,
++        nature: faker.image.url,
++        sports: faker.image.url,
++        transport: faker.image.url,
++        dataUri: faker.image.dataUri
++    },
++    internet: {
++        email: faker.internet.email,
++        exampleEmail: faker.internet.exampleEmail,
++        userName: faker.internet.username,
++        protocol: faker.internet.protocol,
++        url: faker.internet.url,
++        domainName: faker.internet.domainName,
++        domainSuffix: faker.internet.domainSuffix,
++        domainWord: faker.internet.domainWord,
++        ip: faker.internet.ipv4,
++        ipv6: faker.internet.ipv6,
++        userAgent: faker.internet.userAgent,
++        color: faker.color.rgb,
++        mac: faker.internet.mac,
++        password: faker.internet.password
++    },
++    lorem: {
++        word: faker.lorem.word,
++        words: faker.lorem.words,
++        sentence: faker.lorem.sentence,
++        slug: faker.lorem.slug,
++        sentences: faker.lorem.sentences,
++        paragraph: faker.lorem.paragraph,
++        paragraphs: faker.lorem.paragraphs,
++        text: faker.lorem.text,
++        lines: faker.lorem.lines
++    },
++    name: {
++        firstName: faker.person.firstName,
++        lastName: faker.person.lastName,
++        findName: faker.person.fullName,
++        jobTitle: faker.person.jobTitle,
++        prefix: faker.person.prefix,
++        suffix: faker.person.suffix,
++        jobDescriptor: faker.person.jobDescriptor,
++        jobArea: faker.person.jobArea,
++        jobType: faker.person.jobType
++    },
++    datatype: {
++        uuid: faker.string.uuid,
++        boolean: faker.datatype.boolean,
++        number: faker.number.int
++    },
++    random: {
++        word: faker.word.sample,
++        alphaNumeric: function (count) {
++            return faker.string.alphanumeric(count === undefined ? 1 : count);
++        },
++        arrayElement: faker.helpers.arrayElement
++    },
++    system: {
++        fileName: faker.system.fileName,
++        commonFileName: faker.system.commonFileName,
++        mimeType: faker.system.mimeType,
++        commonFileType: faker.system.commonFileType,
++        commonFileExt: faker.system.commonFileExt,
++        fileType: faker.system.fileType,
++        fileExt: faker.system.fileExt,
++        semver: faker.system.semver
++    },
++    phone: {
++        phoneNumberFormat: function () {
++            return faker.phone.number();
++        }
++    }
++};
