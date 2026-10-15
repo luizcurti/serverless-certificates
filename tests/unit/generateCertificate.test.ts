@@ -366,7 +366,7 @@ describe('generateCertificate', () => {
     expect(result.statusCode).toBe(201);
     expect(JSON.parse(result.body)).toEqual({
       message: 'Certificate created successfully',
-      url: 'https://certificadoignite2021.s3.amazonaws.com/test123.pdf',
+      url: 'https://certificadoignite2021.s3.us-east-1.amazonaws.com/test123.pdf',
     });
 
     expect(mockDocumentSendGenerate).toHaveBeenCalledTimes(1);
@@ -412,7 +412,7 @@ describe('generateCertificate', () => {
     expect(JSON.parse(result.body)).toEqual({
       message: 'Certificate already exists',
       name: 'Jane Doe',
-      url: 'https://certificadoignite2021.s3.amazonaws.com/existing123.pdf',
+      url: 'https://certificadoignite2021.s3.us-east-1.amazonaws.com/existing123.pdf',
     });
 
     expect(mockDocumentSendGenerate).toHaveBeenCalledTimes(2); // conditional put + get
@@ -454,7 +454,7 @@ describe('generateCertificate', () => {
     expect(JSON.parse(result.body)).toEqual({
       message: 'Certificate already exists',
       name: 'Jane Doe',
-      url: 'https://certificadoignite2021.s3.amazonaws.com/existing123.pdf',
+      url: 'https://certificadoignite2021.s3.us-east-1.amazonaws.com/existing123.pdf',
     });
   });
 
