@@ -8,8 +8,11 @@
  *  - src/templates/** is copied alongside the bundle, because the handler
  *    code reads templates relative to process.cwd() (i.e. /var/task).
  *  - externalized packages (only @sparticuz/chromium, too large/native to
- *    bundle) are copied into node_modules/ next to the bundle so `require`
- *    resolves them at runtime.
+ *    bundle) are installed with npm into node_modules/ next to the bundle,
+ *    together with their own dependency tree (copying just the package folder
+ *    left out e.g. follow-redirects/tar-fs, so the function crashed at init).
+ *  - the packaged handler is then require()d once, so a missing runtime
+ *    dependency fails the build instead of the deployed Lambda.
  */
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -62,8 +65,43 @@ function build(fn) {
 
   copyDir(path.join(ROOT, 'src', 'templates'), path.join(outDir, 'src', 'templates'));
 
-  for (const dep of fn.external) {
-    copyDir(path.join(ROOT, 'node_modules', dep), path.join(outDir, 'node_modules', dep));
+  if (fn.external.length > 0) {
+    const dependencies = Object.fromEntries(
+      fn.external.map((dep) => {
+        const pkg = JSON.parse(
+          fs.readFileSync(path.join(ROOT, 'node_modules', dep, 'package.json'), 'utf8'),
+        );
+        return [dep, pkg.version];
+      }),
+    );
+    fs.writeFileSync(
+      path.join(outDir, 'package.json'),
+      JSON.stringify({ name: fn.name, private: true, dependencies }, null, 2),
+    );
+    const install = spawnSync(
+      'npm',
+      ['install', '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock', '--ignore-scripts'],
+      { cwd: outDir, stdio: 'inherit' },
+    );
+    if (install.status !== 0) {
+      process.exit(install.status ?? 1);
+    }
+  }
+
+  // Load the packaged handler the way Lambda would, so missing runtime
+  // dependencies surface here rather than as a 500 from the deployed API.
+  const check = spawnSync(
+    process.execPath,
+    ['-e', `require(${JSON.stringify(path.join(outDir, 'index.js'))})`],
+    {
+      cwd: outDir,
+      stdio: 'inherit',
+      env: { ...process.env, AWS_REGION: process.env.AWS_REGION || 'eu-west-1' },
+    },
+  );
+  if (check.status !== 0) {
+    console.error(`Packaged ${fn.name} handler failed to load`);
+    process.exit(check.status ?? 1);
   }
 
   console.log(`Built ${fn.name} -> ${path.relative(ROOT, outDir)}`);
