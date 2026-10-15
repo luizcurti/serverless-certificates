@@ -175,7 +175,7 @@ resource "aws_lambda_function" "generate_certificate" {
   # traffic spike can't exhaust the account's Lambda concurrency and starve
   # verifyCertificate. Works together with the API Gateway throttling on
   # this route (see apigateway.tf).
-  reserved_concurrent_executions = var.generate_certificate_reserved_concurrency
+  reserved_concurrent_executions = var.reserve_lambda_concurrency ? var.generate_certificate_reserved_concurrency : null
 
   s3_bucket        = aws_s3_bucket.lambda_deployments.id
   s3_key           = aws_s3_object.generate_certificate_package.key

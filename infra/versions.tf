@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10"
 
   required_providers {
     aws = {
@@ -16,10 +16,11 @@ terraform {
     }
   }
 
-  # Local state by default (terraform.tfstate, gitignored) - simplest option
-  # for a single-developer/small-team project. For shared/team use, add an
-  # S3 backend block here (with a separate bootstrap step for the state
-  # bucket + a DynamoDB lock table).
+  # No backend block on purpose: local runs use local state
+  # (infra/terraform.tfstate, gitignored). The CI-CD deploy and Destroy
+  # workflows write infra/ci_backend.tf with `backend "s3" {}` right before
+  # `terraform init`, pointing at the bucket created by ../bootstrap (native
+  # S3 locking via use_lockfile, hence >= 1.10).
 }
 
 provider "aws" {

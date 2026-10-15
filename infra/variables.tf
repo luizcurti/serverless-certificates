@@ -11,15 +11,15 @@ variable "project_name" {
 }
 
 variable "certificate_bucket_name" {
-  description = "S3 bucket name for storing generated certificate PDFs. Bucket names are globally unique across all of AWS, so the default is very likely already taken - override it."
+  description = "S3 bucket name for storing generated certificate PDFs. null (the default) derives a globally unique name: <project_name>-certificates-<account id>."
   type        = string
-  default     = "certificadoignite2021"
+  default     = null
 }
 
 variable "dynamodb_table_name" {
-  description = "DynamoDB table name for certificate records"
+  description = "DynamoDB table name for certificate records. null (the default) uses <project_name>-users-certificate, so the CI/CD deploy role (scoped by the project_name prefix) can manage it."
   type        = string
-  default     = "users_certificate"
+  default     = null
 }
 
 variable "lambda_memory_size" {
@@ -47,9 +47,15 @@ variable "log_retention_days" {
 }
 
 variable "generate_certificate_reserved_concurrency" {
-  description = "Reserved concurrent executions for generateCertificate, capping worst-case cost/account-concurrency usage from the Chromium rendering path"
+  description = "Reserved concurrent executions for generateCertificate, capping worst-case cost/account-concurrency usage from the Chromium rendering path. Only applied when reserve_lambda_concurrency is true."
   type        = number
   default     = 5
+}
+
+variable "reserve_lambda_concurrency" {
+  description = "Whether to apply generate_certificate_reserved_concurrency. Set false on accounts with the default 10-execution concurrency quota, where AWS doesn't allow reserving any (it must keep 10 unreserved)."
+  type        = bool
+  default     = true
 }
 
 variable "budget_alert_email" {

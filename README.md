@@ -1,6 +1,6 @@
 # 📜 Certificate Generation Service
 
-[![CI](https://github.com/luizcurti/nodejs-serverless/actions/workflows/ci.yml/badge.svg)](https://github.com/luizcurti/nodejs-serverless/actions/workflows/ci.yml)
+[![CI-CD](https://github.com/luizcurti/serverless-certificates/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/luizcurti/serverless-certificates/actions/workflows/ci-cd.yml)
 [![Node](https://img.shields.io/badge/node-24.x-green.svg)](https://nodejs.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
@@ -184,26 +184,48 @@ terraform -chdir=infra output -raw generate_certificate_api_key
 
 `yarn infra:destroy` tears everything down.
 
-State is local by default (`infra/terraform.tfstate`, gitignored) — fine for a single developer or small team, and what this repository ships with today (no remote backend is configured). For shared/team use, or to enable the CI `terraform plan`/`apply` jobs described below, add an S3 backend block to `infra/versions.tf`, which needs its own one-time bootstrap **before** `terraform init` will use it:
-1. Create an S3 bucket (versioning enabled) to hold `terraform.tfstate`.
-2. Create a DynamoDB table (partition key `LockID`, string) for state locking.
-3. Add the `backend "s3" { ... }` block to `infra/versions.tf` pointing at that bucket/table, then run `terraform -chdir=infra init -migrate-state`.
+State is local for these manual commands (`infra/terraform.tfstate`, gitignored). Once the CI/CD pipeline below owns the AWS stack, don't also `apply` it manually with local state: the two states would diverge.
 
-`var.certificate_bucket_name` (in `infra/variables.tf`) defaults to `certificadoignite2021`; S3 bucket names are globally unique across all AWS accounts, so you must override it (`terraform apply -var certificate_bucket_name=your-unique-name`).
+The certificates bucket is named `<project_name>-certificates-<account id>` and the table `<project_name>-users-certificate` by default, so they're unique and inside the deploy role's scope; override with `certificate_bucket_name` / `dynamodb_table_name`.
 
 ![Deployment architecture](docs/img/deployment-architecture.png)
 
-### CI-driven `terraform plan` / `apply` (optional, disabled by default)
+### Deploy to AWS (GitHub Actions)
 
-`.github/workflows/ci.yml` includes `terraform-plan` (runs on PRs, posts the plan as a PR comment) and `terraform-apply` (runs on push to `main`) jobs, but both are **no-ops** until you opt in — this project has no remote state and no AWS OIDC role configured out of the box, so there's nothing for them to authenticate with or produce a meaningful diff against. To activate them:
-1. Complete the remote backend bootstrap above (a plan against local, always-empty CI state would show "everything will be created" on every run, which isn't a useful diff).
-2. Create an IAM role trusted by GitHub's OIDC provider (`token.actions.githubusercontent.com`), scoped to this repo, with permissions to manage the resources in `infra/`.
-3. In the repo's GitHub Settings, add secret `AWS_ROLE_ARN` (the role from step 2) and variables `AWS_REGION` and `TF_PLAN_ENABLED=true`.
-4. For manual-approval-before-apply, create a `production` GitHub Environment scoped to the `main` branch with required reviewers — `terraform-apply` already targets that environment name.
+Pushes to `main` deploy to real AWS through the `deploy` job in [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml), after `build-and-test` passes. It authenticates with GitHub OIDC, so no AWS access keys are stored in GitHub. Until it is configured, the job skips the AWS steps and stays green.
+
+No `backend` block is committed: the deploy job writes `infra/ci_backend.tf` with an S3 backend right before `terraform init`, using the bucket created by [`bootstrap/`](bootstrap) with native S3 locking (`use_lockfile`, no DynamoDB table).
+
+One-time setup, with admin credentials for the target AWS account and `gh` logged in:
+
+```bash
+scripts/bootstrap.sh
+```
+
+It applies [`bootstrap/`](bootstrap) (remote-state bucket + the `ignitecertificate-github-deploy` IAM role, which only the `production` environment of this repo can assume), then creates the `production` GitHub environment and writes `AWS_DEPLOY_ROLE_ARN`, `TF_STATE_BUCKET` and `AWS_REGION` into it. Extra arguments go to `terraform apply`:
+
+- `-var="aws_region=eu-west-1"` to deploy somewhere other than the default `eu-west-2`
+- `-var="create_oidc_provider=true"` on an account that doesn't have the GitHub OIDC provider yet (an account can only have one, so by default it reuses the existing one)
+
+Optional variables in the `production` environment:
+
+- `RESERVE_LAMBDA_CONCURRENCY` (default `false`). New AWS accounts have a 10-execution concurrency limit, which leaves nothing to reserve; raise the _Lambda → Concurrent executions_ quota first, then set `true` to apply `generate_certificate_reserved_concurrency`
+- `BUDGET_ALERT_EMAIL` to create the monthly cost budget alarm
+- protection rules (required reviewers) to approve each deploy by hand
+
+Then push to `main` (or `gh workflow run ci-cd.yml --ref main`). The job builds the Lambda packages, runs `terraform plan` + `apply`, then smoke-tests the live API: an unknown id returns `404`, `POST /generateCertificate` without the key returns `401`, and with the key it renders a real certificate (`deploy-smoke-test`) whose public PDF link must return `200`. The API URL is printed in the job summary. The API key is in the stack outputs: `terraform -chdir=infra output -raw generate_certificate_api_key` after `terraform init` against the same backend, or in SSM at `/ignitecertificate/generateCertificate/apiKey`.
+
+The public certificates bucket needs S3 _Block Public Access_ to be **off at the account level** (it is off by default); if your account turns it on, the bucket policy apply fails with `AccessDenied`.
+
+### Tear down / recreate
+
+To stop paying for the stack while it's unused, run **Actions → Destroy → Run workflow** on `main` and type `destroy` to confirm. It runs `terraform destroy` against the same S3 state, deleting every resource in [`infra/`](infra), certificate PDFs and DynamoDB records included. The [`bootstrap/`](bootstrap) resources are kept, so recreating it needs no setup: run **Actions → CI-CD → Run workflow** on `main`.
+
+The deploy role's permissions ([`bootstrap/deploy_permissions.tf`](bootstrap/deploy_permissions.tf)) are scoped to resources named with the `ignitecertificate` prefix wherever AWS supports it. It can only attach the two AWS-managed policies the stack uses to roles it creates, and can't modify itself.
 
 ## CI
 
-`.github/workflows/ci.yml`'s `build-and-test` job runs on every push/PR to `main`: install → dependency audit (production dependencies) → format check → lint → typecheck → unit tests with coverage → build → Lambda packaging + `terraform validate`/`fmt` + `tflint` + `checkov` (all static, no AWS credentials needed) → Docker build → LocalStack (Docker Compose) → integration tests → API/collection tests → full containerized app smoke test → teardown. Two more jobs, `terraform-plan` and `terraform-apply`, exist but are disabled until the one-time setup above is done (see "CI-driven terraform plan / apply").
+`.github/workflows/ci-cd.yml`'s `build-and-test` job runs on every push/PR to `main`: install → dependency audit (production dependencies) → format check → lint → typecheck → unit tests with coverage → build → Lambda packaging + `terraform validate`/`fmt` + `tflint` + `checkov` (all static, no AWS credentials needed) → Docker build → LocalStack (Docker Compose) → integration tests → API/collection tests → full containerized app smoke test → teardown. Then, on pushes to `main`, the `deploy` job applies the stack to AWS and smoke-tests it (see "Deploy to AWS (GitHub Actions)"); the manual `destroy.yml` workflow tears it down.
 
 ## Observability
 
@@ -240,7 +262,8 @@ State is local by default (`infra/terraform.tfstate`, gitignored) — fine for a
 │   ├── bundle-server.js       # esbuild helper shared by run-dev-server.js / run-api-tests.js
 │   ├── run-dev-server.js      # `yarn dev`
 │   ├── run-api-tests.js       # `yarn test:api`
-│   └── build-lambda.js        # `yarn build:lambda` - packages functions for Terraform
+│   ├── build-lambda.js        # `yarn build:lambda` - packages functions for Terraform
+│   └── bootstrap.sh           # One-time AWS + GitHub setup for the CI/CD deploy
 ├── tests/
 │   ├── unit/                  # Mocked unit tests
 │   ├── integration/           # Real LocalStack integration tests
@@ -248,13 +271,14 @@ State is local by default (`infra/terraform.tfstate`, gitignored) — fine for a
 ├── infra/                     # Terraform: Lambda, IAM, API Gateway, DynamoDB, S3, observability
 │   ├── .tflint.hcl             # tflint config (+ documented rule exception, see CI)
 │   └── .checkov.yaml           # checkov skip-check list, each entry justified
+├── bootstrap/                 # Terraform: remote-state bucket + GitHub OIDC deploy role
 ├── docs/
 │   ├── mmd/                   # Mermaid diagram sources
 │   └── img/                   # Rendered diagrams
 ├── localstack-init/init.sh    # Creates the DynamoDB table + S3 bucket on LocalStack boot
 ├── docker-compose.yml
 ├── Dockerfile
-└── .github/workflows/ci.yml
+└── .github/workflows/ci-cd.yml, destroy.yml
 ```
 
 ## Architectural decisions

@@ -23,3 +23,13 @@ infra/terraform.tfstate.backup
 infra/*.tfplan
 infra/*.tfvars
 !infra/*.tfvars.example
+
+# CI/CD deploy writes these into infra/ (see .github/workflows/ci-cd.yml)
+infra/ci_backend.tf
+infra/tfplan
+infra/*.log
+
+# bootstrap/ keeps its own local state (it creates the remote-state bucket)
+bootstrap/.terraform/
+bootstrap/terraform.tfstate
+bootstrap/terraform.tfstate.backup
