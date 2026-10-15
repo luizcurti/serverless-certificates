@@ -2,7 +2,11 @@
 # returns direct https://<bucket>.s3.amazonaws.com/<id>.pdf URLs, so the
 # objects need to be publicly readable.
 resource "aws_s3_bucket" "certificates" {
-  bucket = var.certificate_bucket_name
+  bucket = local.certificate_bucket_name
+
+  # Generated PDFs are rebuildable from the DynamoDB records; without this the
+  # Destroy workflow would fail on a non-empty bucket.
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "certificates" {
@@ -37,6 +41,7 @@ resource "aws_s3_bucket_policy" "certificates_public_read" {
 # the function source code.
 resource "aws_s3_bucket" "lambda_deployments" {
   bucket_prefix = "${var.project_name}-lambda-deploy-"
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "lambda_deployments" {
