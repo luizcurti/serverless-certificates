@@ -100,7 +100,7 @@ describe('verifyCertificate', () => {
     expect(JSON.parse(result!.body)).toEqual({
       message: 'Valid certificate',
       name: 'John Doe',
-      url: 'https://certificadoignite2021.s3.amazonaws.com/test123.pdf',
+      url: 'https://certificadoignite2021.s3.us-east-1.amazonaws.com/test123.pdf',
     });
 
     expect(mockDocumentSend).toHaveBeenCalledTimes(1);
@@ -181,7 +181,7 @@ describe('verifyCertificate', () => {
     expect(JSON.parse(result!.body)).toEqual({
       message: 'Valid certificate',
       name: 'Jane Smith',
-      url: 'https://certificadoignite2021.s3.amazonaws.com/user456.pdf',
+      url: 'https://certificadoignite2021.s3.us-east-1.amazonaws.com/user456.pdf',
     });
   });
 });

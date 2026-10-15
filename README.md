@@ -147,8 +147,8 @@ Requires an `x-api-key` header matching the deployed `API_KEY` (see [Environment
 
 | Status | Body |
 |---|---|
-| `201 Created` | `{ "message": "Certificate created successfully", "url": "https://<bucket>.s3.amazonaws.com/<id>.pdf" }` |
-| `200 OK` | `{ "message": "Certificate already exists", "name": "<stored name>", "url": "https://<bucket>.s3.amazonaws.com/<id>.pdf" }` — returned when `id` already has a record |
+| `201 Created` | `{ "message": "Certificate created successfully", "url": "https://<bucket>.s3.<region>.amazonaws.com/<id>.pdf" }` |
+| `200 OK` | `{ "message": "Certificate already exists", "name": "<stored name>", "url": "https://<bucket>.s3.<region>.amazonaws.com/<id>.pdf" }` — returned when `id` already has a record |
 | `401 Unauthorized` | `{ "message": "Invalid or missing API key" }` |
 | `400 Bad Request` | `{ "message": "Request body is required" }` / `"Invalid JSON in request body"` / `"id, name and grade are required"` / `"id must contain only letters, numbers, \"_\" and \"-\", up to 64 characters"` / `"name and grade must be at most 100 characters"` |
 | `500 Internal Server Error` | `{ "message": "Internal server error" }` |
@@ -159,7 +159,7 @@ If `id` already exists, the request's `name`/`grade` are ignored (no duplicate D
 
 | Status | Body |
 |---|---|
-| `200 OK` | `{ "message": "Valid certificate", "name": "John Doe", "url": "https://<bucket>.s3.amazonaws.com/<id>.pdf" }` |
+| `200 OK` | `{ "message": "Valid certificate", "name": "John Doe", "url": "https://<bucket>.s3.<region>.amazonaws.com/<id>.pdf" }` |
 | `400 Bad Request` | `{ "message": "Certificate ID is required" }` |
 | `404 Not Found` | `{ "message": "Certificate not found" }` |
 | `500 Internal Server Error` | `{ "message": "Internal server error" }` |
