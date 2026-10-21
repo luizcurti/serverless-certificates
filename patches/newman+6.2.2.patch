@@ -1,0 +1,13 @@
+diff --git a/node_modules/newman/lib/run/options.js b/node_modules/newman/lib/run/options.js
+index 19c876c..074f2e1 100644
+--- a/node_modules/newman/lib/run/options.js
++++ b/node_modules/newman/lib/run/options.js
+@@ -6,7 +6,7 @@ var _ = require('lodash'),
+     CookieJar = require('@postman/tough-cookie').CookieJar,
+     transformer = require('postman-collection-transformer'),
+     liquidJSON = require('liquid-json'),
+-    parseCsv = require('csv-parse'),
++    parseCsv = require('csv-parse').parse,
+     util = require('../util'),
+     config = require('../config'),
+ 

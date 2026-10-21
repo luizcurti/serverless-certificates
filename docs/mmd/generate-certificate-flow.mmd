@@ -1,0 +1,37 @@
+sequenceDiagram
+    participant C as Client
+    participant L as generateCertificate Lambda
+    participant SSM as SSM Parameter Store
+    participant D as DynamoDB
+    participant Ch as Headless Chromium
+    participant S as S3
+
+    C->>L: POST /generateCertificate {id, name, grade}<br/>x-api-key header
+
+    L->>SSM: GetParameter (cached after cold start)
+    SSM-->>L: expected API key
+    alt missing/wrong x-api-key
+        L-->>C: 401 Unauthorized
+    end
+
+    L->>L: validate body (required fields, id pattern, max lengths)
+    alt invalid body
+        L-->>C: 400 Bad Request
+    end
+
+    L->>D: PutItem {id, name, grade, created_at}<br/>ConditionExpression: attribute_not_exists(id)
+
+    alt id already exists (conditional check failed)
+        L->>D: GetItem by id
+        D-->>L: existing record
+        Note over L,Ch: PDF is NOT re-rendered, S3 is NOT touched
+        L-->>C: 200 OK {message: "already exists", name, url}
+    else id is new
+        L->>L: render certificate.hbs template
+        L->>Ch: launch browser, setContent, page.pdf()
+        Ch-->>L: PDF bytes
+        L->>S: PutObject {id}.pdf
+        L-->>C: 201 Created {message, url}
+    end
+
+    Note over L: any unhandled failure (DynamoDB/S3/Chromium/SSM)<br/>is caught and returned as 500, never left unhandled

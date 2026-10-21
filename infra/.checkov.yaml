@@ -1,0 +1,75 @@
+# Checkov findings acknowledged as intentional for this project's scale (two
+# Lambdas, low/spiky traffic, single developer/small team - see README
+# "Architectural decisions"). Each skip is a deliberate trade-off, not an
+# oversight; revisit if the project's requirements actually change.
+skip-check:
+  # Both functions are invoked synchronously via API Gateway (AWS_PROXY) -
+  # DLQs only apply to failed *async* Lambda invocations, so this doesn't
+  # apply to this architecture at all.
+  - CKV_AWS_116 # Lambda configured for a Dead Letter Queue
+
+  # Neither function calls anything VPC-only (only DynamoDB/S3/SSM public
+  # service endpoints) - a VPC would add NAT cost and cold-start latency
+  # with no security benefit here.
+  - CKV_AWS_117 # Lambda configured inside a VPC
+
+  # Lambda environment variables are already encrypted at rest with an
+  # AWS-managed key by default. The one real secret (the generateCertificate
+  # API key) was deliberately moved out of env vars into SSM SecureString
+  # (see infra/lambda.tf) instead of adding a customer-managed KMS key here.
+  - CKV_AWS_173 # Lambda environment variable KMS encryption
+
+  # Code-signing config is a multi-team supply-chain control; disproportionate
+  # for a single deploy pipeline.
+  - CKV_AWS_272 # Lambda code-signing
+
+  # CloudWatch Logs are already encrypted at rest with an AWS-managed key.
+  # A customer-managed CMK isn't justified for these low-sensitivity logs.
+  - CKV_AWS_158 # CloudWatch Log Group KMS encryption
+
+  # 14-day retention (var.log_retention_days) is an intentional, explicit
+  # choice for a low-traffic side project - a full year of logs has no value
+  # here and costs more to store.
+  - CKV_AWS_338 # CloudWatch Log Group retention >= 1 year
+
+  # Auth is enforced in the generateCertificate Lambda itself (a shared API
+  # key checked in code - see README "Security"), not via a native API
+  # Gateway authorizer. verifyCertificate is intentionally public/unauthenticated.
+  - CKV_AWS_309 # API GatewayV2 route authorization type
+
+  # DynamoDB's default AWS-owned encryption at rest already applies; this
+  # table holds no data sensitive enough to justify a dedicated CMK.
+  - CKV_AWS_119 # DynamoDB KMS CMK
+
+  # Uses the AWS-managed alias/aws/ssm key intentionally (see
+  # infra/lambda.tf) - proportional for a single shared API key value.
+  - CKV_AWS_337 # SSM parameter KMS CMK
+
+  # aws_s3_bucket.certificates is intentionally public-read: the API returns
+  # direct public PDF URLs by design (a deliberate, confirmed product
+  # decision - see infra/s3.tf and README "Architectural decisions"). The
+  # public-access-block/ACL findings below are the direct, intended
+  # consequence of that design; versioning/lifecycle/replication/access
+  # logging/KMS are enterprise-grade controls not justified for a bucket of
+  # low-value, publicly-issued PDFs. The same "disproportionate for this
+  # project's scale" reasoning applies to aws_s3_bucket.lambda_deployments,
+  # a private bucket holding only rebuildable deployment zips.
+  - CKV_AWS_53 # S3 block public ACLs
+  - CKV_AWS_54 # S3 block public policy
+  - CKV_AWS_55 # S3 ignore public ACLs
+  - CKV_AWS_56 # S3 restrict public buckets
+  - CKV_AWS_70 # S3 bucket policy Principal
+  - CKV2_AWS_6 # S3 bucket public access block
+  - CKV_AWS_18 # S3 access logging
+  - CKV_AWS_21 # S3 versioning
+  - CKV_AWS_144 # S3 cross-region replication
+  - CKV_AWS_145 # S3 default encryption with KMS
+  - CKV2_AWS_61 # S3 lifecycle configuration
+  - CKV2_AWS_62 # S3 event notifications
+
+  # verifyCertificate is a cheap, read-only path already bounded by API
+  # Gateway throttling (see infra/apigateway.tf); leaving it uncapped avoids
+  # legitimate verification traffic being throttled by a concurrency limit
+  # sized for guesswork. generateCertificate (the expensive, abusable path)
+  # already has one - var.generate_certificate_reserved_concurrency.
+  - CKV_AWS_115 # Lambda reserved concurrency

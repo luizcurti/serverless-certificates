@@ -1,0 +1,31 @@
+flowchart LR
+    Client([Client])
+
+    subgraph AWS["AWS (eu-west-1)"]
+        APIGW["API Gateway HTTP API\n(throttled, access logs, X-Ray)"]
+        GenFn["Lambda: generateCertificate\n(X-Ray, reserved concurrency)"]
+        VerifyFn["Lambda: verifyCertificate\n(X-Ray)"]
+        SSM[("SSM Parameter Store\napi key, SecureString")]
+        DDB[("DynamoDB\nusers_certificate")]
+        S3[("S3\ncertificate PDFs, public read")]
+        CW[["CloudWatch\nlogs + alarms"]]
+    end
+
+    Client -->|"POST /generateCertificate\n(x-api-key header)"| APIGW
+    Client -->|"GET /verifyCertificate/{id}\n(public)"| APIGW
+    APIGW --> GenFn
+    APIGW --> VerifyFn
+
+    GenFn -->|"GetParameter (decrypt)"| SSM
+    GenFn -->|"conditional PutItem / GetItem"| DDB
+    GenFn -->|"PutObject (rendered PDF)"| S3
+
+    VerifyFn -->|"GetItem"| DDB
+    VerifyFn -.->|"builds public URL"| S3
+
+    GenFn -.-> CW
+    VerifyFn -.-> CW
+    APIGW -.-> CW
+
+    note["Chromium via @sparticuz/chromium\n+ puppeteer-core renders the PDF\ninside generateCertificate -\nskipped entirely if the id already exists"]
+    GenFn -.- note

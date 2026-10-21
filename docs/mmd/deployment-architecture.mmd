@@ -1,0 +1,40 @@
+flowchart LR
+    Dev([Developer / CI])
+
+    subgraph Build["Build (yarn build:lambda)"]
+        Esbuild["esbuild bundles each\nsrc/functions/*.ts"]
+        Pkg["infra/build/&lt;fn&gt;/\n(+ templates, + @sparticuz/chromium)"]
+        Esbuild --> Pkg
+    end
+
+    subgraph TF["Terraform (infra/)"]
+        Zip["archive_file\n(zips infra/build/&lt;fn&gt;/)"]
+        DeployBucket[("S3: lambda deployment\npackages (private)")]
+        GenLambda["aws_lambda_function\ngenerateCertificate"]
+        VerifyLambda["aws_lambda_function\nverifyCertificate"]
+        GenRole["IAM role: generateCertificate\n(DynamoDB + S3 + SSM, least-privilege)"]
+        VerifyRole["IAM role: verifyCertificate\n(DynamoDB read-only)"]
+        SSM[("SSM Parameter\napi key, SecureString")]
+        DDB[("DynamoDB\nusers_certificate, PAY_PER_REQUEST + PITR")]
+        CertBucket[("S3: certificate PDFs\n(public read)")]
+        API["API Gateway HTTP API\n(throttled, access logs)"]
+        Alarms[["CloudWatch alarms\nerrors / throttles / duration / 4xx / 5xx"]]
+    end
+
+    Dev --> Esbuild
+    Pkg --> Zip
+    Zip --> DeployBucket
+    DeployBucket --> GenLambda
+    DeployBucket --> VerifyLambda
+    GenRole --> GenLambda
+    VerifyRole --> VerifyLambda
+    GenLambda --> DDB
+    GenLambda --> CertBucket
+    GenLambda --> SSM
+    VerifyLambda --> DDB
+    API --> GenLambda
+    API --> VerifyLambda
+    GenLambda -.-> Alarms
+    VerifyLambda -.-> Alarms
+    API -.-> Alarms
+    Dev -->|"terraform apply\n(one-off, local state today)"| TF

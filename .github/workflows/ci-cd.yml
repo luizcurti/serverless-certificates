@@ -1,0 +1,341 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # "Run workflow" on main re-runs the full pipeline and deploys, e.g. to recreate the stack
+  # after the Destroy workflow.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Never cancel a run on main mid-deploy (it could leave a Terraform state lock behind).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'yarn'
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.12'
+          terraform_wrapper: false
+
+      # 1. Install dependencies
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # 2. Dependency / security checks (scoped to production dependencies)
+      - name: Audit production dependencies
+        run: yarn audit --groups dependencies
+        continue-on-error: true
+
+      # 3. Formatting / lint
+      - name: Check formatting
+        run: yarn format:check
+
+      - name: Lint
+        run: yarn lint
+
+      # 4. Typecheck
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # 5. Unit tests
+      - name: Unit tests with coverage
+        run: yarn test:coverage
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+        continue-on-error: true
+
+      # 9. Build
+      - name: Build
+        run: yarn build
+
+      # Infrastructure-as-code checks. No AWS credentials are configured in
+      # this workflow, so this validates the Terraform config and the Lambda
+      # packaging step without ever calling `plan`/`apply` against a real
+      # account.
+      - name: Build Lambda deployment packages
+        run: yarn build:lambda
+
+      - name: Terraform format check
+        run: terraform -chdir=infra fmt -check -diff
+
+      - name: Terraform init
+        run: terraform -chdir=infra init -backend=false
+
+      - name: Terraform validate
+        run: terraform -chdir=infra validate
+
+      - name: Terraform format check + validate (bootstrap)
+        run: |
+          terraform -chdir=bootstrap fmt -check -diff
+          terraform -chdir=bootstrap init -backend=false
+          terraform -chdir=bootstrap validate
+
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.55.1
+
+      - name: Terraform lint
+        working-directory: infra
+        run: |
+          tflint --init
+          tflint --recursive
+
+      # Static security/misconfiguration analysis for the Terraform config.
+      # No AWS credentials needed - this only inspects the .tf files.
+      - name: Terraform static analysis (checkov)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          soft_fail: false
+          quiet: true
+
+      # 10. Docker build
+      - name: Docker build
+        run: docker build -t certificate-app:ci .
+
+      # Local AWS services for integration/API/E2E tests, run the same way a
+      # contributor would run them locally (docker-compose.yml).
+      - name: Start LocalStack (Docker Compose)
+        run: docker compose up -d localstack dynamodb-admin
+
+      - name: Wait for LocalStack to be healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4566/_localstack/health > /dev/null; then
+              echo "LocalStack is up"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack did not become healthy in time" >&2
+          docker compose logs localstack
+          exit 1
+
+      # 6/11. Integration tests (real DynamoDB + S3 + Chromium PDF generation
+      # against the Dockerized LocalStack)
+      - name: Integration tests
+        run: yarn test:integration
+
+      # 7/8/11. API/collection tests (Postman/Newman) over real HTTP, against
+      # the same Dockerized LocalStack
+      - name: API/collection tests
+        run: yarn test:api
+        env:
+          IS_OFFLINE: 'true'
+          AWS_REGION: us-east-1
+          DYNAMODB_ENDPOINT: http://localhost:4566
+          S3_ENDPOINT: http://localhost:4566
+          S3_BUCKET_NAME: certificadoignite2021
+          API_KEY: test-api-key
+
+      # Full containerized app smoke test: build the app image, start it
+      # alongside LocalStack, and exercise both endpoints over real HTTP.
+      - name: Docker Compose app smoke test
+        run: |
+          docker compose up -d --build app
+          for i in $(seq 1 30); do
+            # verifyCertificate/health-check always 404s (no such id) - any
+            # HTTP response at all means the server is accepting connections.
+            if curl -s -o /dev/null http://localhost:3000/verifyCertificate/health-check; then
+              echo "App is up"
+              break
+            fi
+            sleep 2
+          done
+          curl -sf -X POST http://localhost:3000/generateCertificate \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: local-dev-api-key" \
+            -d '{"id":"ci-smoke-test","name":"CI Smoke Test","grade":"A+"}'
+
+      - name: Tear down Docker Compose
+        if: always()
+        run: docker compose down -v
+
+  # Deploys the stack to real AWS on every push to main (or manual run on main), once
+  # build-and-test passes. Auth is GitHub OIDC -> IAM role (bootstrap/), so no AWS keys are
+  # stored in GitHub. Configuration lives in the `production` GitHub environment (see README
+  # "Deploy to AWS (GitHub Actions)"); until AWS_DEPLOY_ROLE_ARN is set there, the job skips the
+  # AWS steps and stays green.
+  deploy:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      # false = no reserved concurrency. New AWS accounts start with a 10-execution account
+      # limit, which leaves nothing to reserve (AWS keeps 10 unreserved). Once the account
+      # quota is raised, set RESERVE_LAMBDA_CONCURRENCY=true in the production environment.
+      TF_VAR_reserve_lambda_concurrency: ${{ vars.RESERVE_LAMBDA_CONCURRENCY || 'false' }}
+      TF_VAR_budget_alert_email: ${{ vars.BUDGET_ALERT_EMAIL }}
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - name: Check deploy configuration
+        id: config
+        env:
+          ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          if [ -z "$ROLE_ARN" ]; then
+            echo "::notice title=Deploy skipped::AWS_DEPLOY_ROLE_ARN is not set in the production environment. Run scripts/bootstrap.sh (see README -> Deploy to AWS)."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          missing=""
+          [ -z "$AWS_REGION" ] && missing="$missing AWS_REGION"
+          [ -z "$STATE_BUCKET" ] && missing="$missing TF_STATE_BUCKET"
+          if [ -n "$missing" ]; then
+            echo "::error title=Deploy misconfigured::Missing in the production environment:$missing"
+            exit 1
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'yarn'
+
+      - name: Build Lambda deployment packages
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          yarn install --frozen-lockfile
+          yarn build:lambda
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.config.outputs.enabled == 'true'
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: gha-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        if: steps.config.outputs.enabled == 'true'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '~1.12'
+          terraform_wrapper: false
+
+      # The S3 backend is only added here, at deploy time, so local runs keep local state.
+      - name: Terraform Init (S3 remote state)
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          cat > ci_backend.tf <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+          terraform init -input=false \
+            -backend-config="bucket=${STATE_BUCKET}" \
+            -backend-config="key=serverless-certificates/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Terraform Plan
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        shell: bash # bash -eo pipefail, so `| tee` keeps Terraform's exit code
+        run: terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.log
+
+      - name: Terraform Apply
+        if: steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        shell: bash # bash -eo pipefail, so `| tee` keeps Terraform's exit code
+        run: terraform apply -input=false -no-color tfplan 2>&1 | tee apply.log
+
+      # Surface each Terraform "Error:" block as a run annotation, so failures are readable
+      # from the run summary / checks API without downloading the raw job log.
+      - name: Report Terraform errors
+        if: failure() && steps.config.outputs.enabled == 'true'
+        working-directory: infra
+        run: |
+          for f in plan.log apply.log; do
+            [ -f "$f" ] || continue
+            awk '{ gsub(/%/, "%25") }
+                 /^Error: / { if (buf) print buf; buf = $0; n = 0; next }
+                 buf && n < 15 { buf = buf "%0A" $0; n++ }
+                 END { if (buf) print buf }' "$f" |
+              while IFS= read -r block; do echo "::error title=Terraform ($f)::${block}"; done
+          done
+
+      # End-to-end against the live stack: API key auth, Chromium PDF rendering on Lambda,
+      # DynamoDB write/read and the public S3 link. Uses a fixed id, so re-runs hit the
+      # "already exists" path (200) instead of piling up new certificates.
+      - name: Smoke Test
+        if: steps.config.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          API_URL=$(terraform -chdir=infra output -raw api_endpoint)
+          API_KEY=$(terraform -chdir=infra output -raw generate_certificate_api_key)
+          echo "::add-mask::${API_KEY}"
+          echo "API: ${API_URL}"
+          expect() { [ "$2" = "$3" ] || { echo "::error title=Smoke test::$1 expected $3, got $2"; exit 1; }; echo "$1 -> $2"; }
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 5 --retry-all-errors \
+            "${API_URL}/verifyCertificate/does-not-exist")
+          expect "GET /verifyCertificate/{unknown}" "$code" 404
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${API_URL}/generateCertificate" \
+            -H 'Content-Type: application/json' -d '{"id":"x","name":"x","grade":"x"}')
+          expect "POST /generateCertificate without API key" "$code" 401
+
+          body=$(curl -s -w '\n%{http_code}' --max-time 60 --retry 3 --retry-delay 10 --retry-all-errors \
+            -X POST "${API_URL}/generateCertificate" \
+            -H 'Content-Type: application/json' -H "x-api-key: ${API_KEY}" \
+            -d '{"id":"deploy-smoke-test","name":"Deploy Smoke Test","grade":"A"}')
+          code=$(tail -n1 <<<"$body")
+          [ "$code" = "201" ] || [ "$code" = "200" ] || { echo "::error title=Smoke test::POST /generateCertificate expected 200/201, got ${code}: $(head -n -1 <<<"$body")"; exit 1; }
+          echo "POST /generateCertificate -> ${code}"
+
+          verify=$(curl -s "${API_URL}/verifyCertificate/deploy-smoke-test")
+          pdf_url=$(jq -r '.url // empty' <<<"$verify")
+          [ -n "$pdf_url" ] || { echo "::error title=Smoke test::verifyCertificate returned no url: ${verify}"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$pdf_url")
+          expect "GET certificate PDF (public S3)" "$code" 200
+
+          echo "### Deployed :rocket:" >> "$GITHUB_STEP_SUMMARY"
+          echo "API URL: ${API_URL}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Sample certificate: ${pdf_url}" >> "$GITHUB_STEP_SUMMARY"
